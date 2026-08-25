@@ -1,0 +1,10 @@
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+*.mp4
+*.mov
+*.avi
+*.mkv
+__pycache__/
