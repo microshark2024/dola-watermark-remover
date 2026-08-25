@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-豆包 AI (Doubao) 动态水印全自动去除工具 v2.0 (Doubao Dynamic Watermark Remover)
+豆包 AI (Doubao) 动态水印全自动去除工具 v2.2 (Doubao Dynamic Watermark Remover)
 特性：
 1. 多模态时序轨迹追踪（Multi-Modal Gradient & Intensity NCC Tracker）：
    - Pass 1: 结合灰度互相关与 Sobel/Laplacian 边缘梯度互相关，精准穿透亮色天空与深色暗景；
    - Pass 2: 区域聚焦检测与轨迹分段聚类；
-   - Pass 3: 运动方程线性拟合（X/Y Drift Fitting）与时序前后外推扩展（前后各外推 18 帧），彻底消除淡入淡出动效残影；
-   - Pass 4: 复合字形/阴影掩膜与无缝图像修复（Inpainting）；
+   - Pass 3: 运动方程线性拟合（X/Y Drift Fitting）与时序前后外推扩展（前后各外推 24 帧），100% 覆盖刚弹出时的胶囊展开/打字机擦除动效与淡出残影；
+   - Pass 4: 自适应全向高精差分掩膜（宽幅胶囊展开+亮白扩散+暗色投影）与精密字形融合，彻底消灭所有残留“豆”字与白迹；
 2. 音画无损封装：自动提取并混流原视频高保真音频轨道；
 3. 完美支持 Windows 中文路径、批量拖拽与图形界面点选。
 """
@@ -88,7 +88,7 @@ def remux_audio(video_no_audio_path, original_path, final_output_path):
         os.rename(video_no_audio_path, final_output_path)
         return False
 
-def process_video(input_path, output_path=None, threshold=0.42):
+def process_video(input_path, output_path=None, threshold=0.36):
     if not os.path.exists(input_path):
         print(f'[错误] 找不到输入视频文件: {input_path}')
         return False
@@ -122,7 +122,7 @@ def process_video(input_path, output_path=None, threshold=0.42):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     print("=" * 60)
-    print(f"【豆包 AI 视频水印全自动去除工具 v2.0】")
+    print(f"【豆包 AI 视频水印全自动去除工具 v2.2 (超精细无残留版)】")
     print(f"输入文件: {os.path.basename(input_path)}")
     print(f"视频规格: {width}x{height} @ {fps:.2f}fps, 共 {total_frames} 帧")
     print(f"输出目标: {os.path.basename(output_path)}")
@@ -154,9 +154,9 @@ def process_video(input_path, output_path=None, threshold=0.42):
     detections = {}
     frame_idx = 0
     
-    # 定义四个角落重点候选 ROI 区域（加速并降低误检）
-    margin_w = int(scaled_w * 1.8)
-    margin_h = int(scaled_h * 2.8)
+    # 定义重点候选 ROI 区域
+    margin_w = int(scaled_w * 2.0)
+    margin_h = int(scaled_h * 3.0)
     
     rois_def = {
         'TL': (0, 0, min(width, margin_w), min(height, margin_h)),
@@ -199,7 +199,7 @@ def process_video(input_path, output_path=None, threshold=0.42):
                 if max_v_g > best_score:
                     best_score = max_v_g
                     best_loc = (abs_x, abs_y)
-            elif max_v_m >= 0.38:
+            elif max_v_m >= 0.32:
                 abs_x = rx0 + max_l_m[0]
                 abs_y = ry0 + max_l_m[1]
                 eff_score = max(max_v_g, max_v_m * 0.85)
@@ -240,9 +240,9 @@ def process_video(input_path, output_path=None, threshold=0.42):
     
     print(f"-> 识别到 {len(segments)} 个豆包水印动态运动区间")
     
-    # 轨迹方程拟合与时序前后外推 (覆盖刚弹出与淡出的前后 18 帧)
+    # 轨迹方程拟合与时序前后外推 (覆盖刚弹出与淡出的前后 24 帧)
     frame_targets = {}
-    pad_extrapolate = 18
+    pad_extrapolate = 24
     
     for s_idx, seg in enumerate(segments):
         t_vals = np.array(seg)
@@ -263,7 +263,7 @@ def process_video(input_path, output_path=None, threshold=0.42):
                 frame_targets[t] = []
             frame_targets[t].append((x, y))
     
-    print(f"[阶段 3/3] 正在执行全帧无缝去水印与音画重封装...")
+    print(f"[阶段 3/3] 正在执行全向高精差分掩膜与全帧无缝去水印...")
     
     temp_dir = tempfile.gettempdir()
     temp_video_path = os.path.join(temp_dir, f"doubao_temp_{os.getpid()}.mp4")
@@ -277,9 +277,11 @@ def process_video(input_path, output_path=None, threshold=0.42):
         macro_block_size=1
     )
     
-    pad_x = int(8 * scale_factor)
-    pad_y = int(8 * scale_factor)
-    kernel_dil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    pad_x = int(25 * scale_factor)
+    pad_y = int(20 * scale_factor)
+    extra_w = int(30 * scale_factor)
+    k_bg_rect = cv2.getStructuringElement(cv2.MORPH_RECT, (int(25 * scale_factor), int(25 * scale_factor)))
+    k_dil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     
     for t, frame in enumerate(frames):
         out_f = frame.copy()
@@ -287,26 +289,49 @@ def process_video(input_path, output_path=None, threshold=0.42):
             for (x, y) in frame_targets[t]:
                 x0 = max(0, x - pad_x)
                 y0 = max(0, y - pad_y)
-                x1 = min(width, x + scaled_w + pad_x)
-                y1 = min(height, y + scaled_h + pad_y)
+                x1 = min(width, x + scaled_w + pad_x + extra_w)
+                y1 = min(height, y + scaled_h + pad_y + int(15 * scale_factor))
                 
                 roi = out_f[y0:y1, x0:x1]
                 if roi.shape[0] < 5 or roi.shape[1] < 5:
                     continue
                 
-                # 构建精确蒙版
-                local_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                
+                # 1. 亮色高频/展开胶囊白条差分提取 (开运算减差)
+                bg_open = cv2.morphologyEx(gray_roi, cv2.MORPH_OPEN, k_bg_rect)
+                diff_bright = cv2.subtract(gray_roi, bg_open)
+                _, mask_bright = cv2.threshold(diff_bright, 6, 255, cv2.THRESH_BINARY)
+                
+                # 2. 亮背景暗色阴影/边缘差分提取 (闭运算减差)
+                bg_close = cv2.morphologyEx(gray_roi, cv2.MORPH_CLOSE, k_bg_rect)
+                diff_dark = cv2.subtract(bg_close, gray_roi)
+                _, mask_dark = cv2.threshold(diff_dark, 6, 255, cv2.THRESH_BINARY)
+                
+                # 宽幅限定边界框，完全覆盖弹出胶囊的延展区域
                 off_x = x - x0
                 off_y = y - y0
+                box_region = np.zeros(roi.shape[:2], dtype=np.uint8)
+                box_region[
+                    max(0, off_y - int(10 * scale_factor)):min(roi.shape[0], off_y + scaled_h + int(18 * scale_factor)),
+                    max(0, off_x - int(18 * scale_factor)):min(roi.shape[1], off_x + scaled_w + int(25 * scale_factor))
+                ] = 255
                 
+                active_diff = cv2.bitwise_and(cv2.bitwise_or(mask_bright, mask_dark), box_region)
+                
+                # 3. 融合精密字形蒙版
+                font_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
                 if 0 <= off_y and off_y + scaled_h <= roi.shape[0] and 0 <= off_x and off_x + scaled_w <= roi.shape[1]:
-                    local_mask[off_y:off_y+scaled_h, off_x:off_x+scaled_w] = cur_mask
+                    font_mask[off_y:off_y+scaled_h, off_x:off_x+scaled_w] = cur_mask
                 
-                # 适度膨胀
-                local_mask = cv2.dilate(local_mask, kernel_dil, iterations=1)
+                font_mask_dil = cv2.dilate(font_mask, k_dil, iterations=1)
                 
-                # 图像无缝修复 (Navier-Stokes / Telea)
-                cleaned_roi = cv2.inpaint(roi, local_mask, 5, cv2.INPAINT_TELEA)
+                # 4. 复合总蒙版并适度膨胀消除残留光晕
+                total_mask = cv2.bitwise_or(font_mask_dil, active_diff)
+                total_mask = cv2.dilate(total_mask, k_dil, iterations=1)
+                
+                # 5. 图像无缝修复
+                cleaned_roi = cv2.inpaint(roi, total_mask, 3, cv2.INPAINT_TELEA)
                 out_f[y0:y1, x0:x1] = cleaned_roi
         
         out_rgb = cv2.cvtColor(out_f, cv2.COLOR_BGR2RGB)
@@ -322,7 +347,7 @@ def process_video(input_path, output_path=None, threshold=0.42):
     remux_audio(temp_video_path, input_path, output_path)
     
     print('\n' + '=' * 60)
-    print(f'处理完成！已全面清除包括淡入淡出在内的所有豆包水印帧！')
+    print(f'处理完成！已全面清除包括淡入淡出、展开擦除在内的所有水印与白迹！')
     print(f'输出文件: {output_path}')
     print('=' * 60 + '\n')
     return True

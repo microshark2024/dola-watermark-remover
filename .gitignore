@@ -11,4 +11,11 @@ __pycache__/
 doubao_analysis/
 doubao_test_out/
 verification_frames/
+verification_v2/
 extracted_frames/
+inspect_artifacts/
+inspect_start/
+inspect_transitions/
+inspect_v2_start/
+test_capsule_inpaint/
+test_enhanced/
