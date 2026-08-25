@@ -8,3 +8,7 @@ Thumbs.db
 *.avi
 *.mkv
 __pycache__/
+doubao_analysis/
+doubao_test_out/
+verification_frames/
+extracted_frames/
